@@ -127,3 +127,15 @@ def apply_windows_utf8_bootstrap() -> bool:
 # the very top of their module, before importing anything else.  The
 # import side effect does the right thing.
 apply_windows_utf8_bootstrap()
+
+# 3. Transparently redirect SQLite to PostgreSQL if DATABASE_URL is set in environment
+if os.environ.get("DATABASE_URL"):
+    try:
+        bootstrap_dir = os.path.dirname(os.path.abspath(__file__))
+        if bootstrap_dir not in sys.path:
+            sys.path.insert(0, bootstrap_dir)
+        import pg_sqlite_adapter
+        sys.modules["sqlite3"] = pg_sqlite_adapter
+    except Exception as e:
+        print(f"[PG Injection] Warning: Failed to inject PostgreSQL adapter: {e}")
+
