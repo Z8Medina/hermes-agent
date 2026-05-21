@@ -73,6 +73,41 @@ from utils import base_url_host_matches, env_var_enabled
 logger = logging.getLogger(__name__)
 
 
+def _pool_may_recover_from_rate_limit(
+    pool, *, provider: str | None = None, base_url: str | None = None
+) -> bool:
+    """Decide whether to wait for credential-pool rotation instead of falling back.
+
+    The existing pool-rotation path requires the pool to (1) exist and (2) have
+    at least one entry not currently in exhaustion cooldown.  But rotation is
+    only meaningful when the pool has more than one entry.
+
+    With a single-credential pool (common for Gemini OAuth, Vertex service
+    accounts, and any "one personal key" configuration), the primary entry
+    just 429'd and there is nothing to rotate to.  Waiting for the pool
+    cooldown to expire means retrying against the same exhausted quota — the
+    daily-quota 429 will recur immediately, and the retry budget is burned.
+
+    Additionally, Google CloudCode / Gemini CLI rate limits are ACCOUNT-level
+    throttles — even a multi-entry pool shares the same quota window, so
+    rotation won't recover.  Skip straight to the fallback for those (#13636).
+
+    In those cases we must fall back to the configured ``fallback_model``
+    instead.  Returns True only when rotation has somewhere to go.
+
+    See issues #11314 and #13636.
+    """
+    if pool is None:
+        return False
+    if not pool.has_available():
+        return False
+    # CloudCode / Gemini CLI quotas are account-wide — all pool entries share
+    # the same throttle window, so rotation can't recover.  Prefer fallback.
+    if provider == "google-gemini-cli" or str(base_url or "").startswith("cloudcode-pa://"):
+        return False
+    return len(pool.entries()) > 1
+
+
 def _ra():
     """Lazy reference to ``run_agent`` so callers can patch
     ``run_agent.handle_function_call`` / ``run_agent._set_interrupt`` /

@@ -1,0 +1,67 @@
+name: Hermes Agent Deploy
+
+# Triggers on new releases from NousResearch/hermes-agent
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deploy even if smoke tests warn'
+        required: false
+        default: 'false'
+
+jobs:
+  deploy:
+    name: Deploy to Hermes VPS
+    runs-on: [self-hosted, windows, hermes]
+    timeout-minutes: 30
+
+    steps:
+      - name: 📋 Pre-deploy info
+        shell: pwsh
+        run: |
+          Write-Host "═══════════════════════════════════════════════"
+          Write-Host "  🚀 HERMES DEPLOY TRIGGERED"
+          Write-Host "  Release: ${{ github.ref_name }}"
+          Write-Host "  Triggered by: ${{ github.actor }}"
+          Write-Host "  Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')"
+          Write-Host "═══════════════════════════════════════════════"
+
+      - name: 🔍 Pre-deploy smoke test
+        shell: pwsh
+        run: |
+          $result = & "C:\Hermes\Production\scripts\ci\smoke_test.ps1"
+          if (-not $result) {
+            Write-Warning "Pre-deploy health check failed — proceeding anyway (will attempt deploy)"
+          } else {
+            Write-Host "✅ Pre-deploy: gateway healthy"
+          }
+
+      - name: 🚀 Run deploy
+        shell: pwsh
+        run: |
+          & "C:\Hermes\Production\scripts\ci\deploy.ps1"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Deploy failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+
+      - name: 🧪 Post-deploy smoke tests
+        shell: pwsh
+        run: |
+          $result = & "C:\Hermes\Production\scripts\ci\smoke_test.ps1"
+          if (-not $result) {
+            Write-Error "Post-deploy smoke tests FAILED!"
+            exit 1
+          }
+          Write-Host "✅ All smoke tests passed"
+
+      - name: 📊 Report deploy result
+        if: always()
+        shell: pwsh
+        run: |
+          $HermesExe = "C:\Users\Administrator\.hermes\venv\Scripts\hermes.exe"
+          $version = (& $HermesExe version 2>&1) | Select-Object -First 1
+          Write-Host "Current Hermes version: $version"
+          Write-Host "Deploy status: ${{ job.status }}"
